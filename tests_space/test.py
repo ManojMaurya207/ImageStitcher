@@ -36,7 +36,7 @@ def main():
     # Load images from folder
     # ------------------------------
     imgs = []
-    image_paths = sorted(glob.glob('SampleImg/Slides/*.JPG'))
+    image_paths = sorted(glob.glob('data/SampleImg/Slides/*.JPG'))
 
     if len(image_paths) == 0:
         print("No images found in PanoImg/ folder")
@@ -69,6 +69,7 @@ def main():
     cv.imshow("result",pano)
     cv.imwrite(args.output, pano)
     print("Stitching completed. Saved as:", args.output)
+    cv.waitKey(0)
 
     print("Done")
 

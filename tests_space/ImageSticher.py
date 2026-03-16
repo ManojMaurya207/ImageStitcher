@@ -5,7 +5,7 @@ import glob
 # ------------------------------
 # Load images
 # ------------------------------
-image_paths = glob.glob('SampleImg/TestingFolder/*.jpeg')
+image_paths = glob.glob('data/sample/*.jpg')
 images = []
 
 for image in image_paths:
@@ -17,10 +17,10 @@ for image in image_paths:
 imageStitcher = cv2.Stitcher_create()
 error, stitchedImg = imageStitcher.stitch(images)
 
-if error:
+if error != cv2.Stitcher_OK:
     print("Image could not be stitched!")
 else:
-    stitchedImg = cv2.copyMakeBorder(stitchedImg, 100, 100, 100, 100, cv2.BORDER_CONSTANT, (0, 0, 0))
+    # stitchedImg = cv2.copyMakeBorder(stitchedImg, 100, 100, 100, 100, cv2.BORDER_CONSTANT, (0, 0, 0))
     cv2.imshow("Stitched Image", stitchedImg)
     cv2.waitKey(0)
 
