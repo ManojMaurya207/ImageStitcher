@@ -1,0 +1,12 @@
+venv/
+.venv/
+.vscode/
+opencv-env/
+
+__pycache__/
+*.pyc
+*.pyo
+
+.ipynb_checkpoints/
+
+.env
