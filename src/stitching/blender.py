@@ -26,67 +26,77 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 def blend_images(
-    canvas: np.ndarray,
+    warped_src: np.ndarray,
     base_img: np.ndarray,
     offset: tuple[int, int],
     feather: int = 40,
 ) -> np.ndarray:
     """
-    Alpha-feather blend the overlap region between the warped canvas and
-    the base image.
+    Alpha blend the overlap region using 2D Distance Transform weights.
+    This creates smooth seams in any direction (horizontal, vertical, diagonal).
 
     Parameters
     ----------
-    canvas   : Full panorama canvas (output of warp_and_place).
-    base_img : The reference image placed on the canvas.
-    offset   : (tx, ty) shift used when placing base_img on canvas.
-    feather  : Width of the blending gradient in pixels (default 40).
+    warped_src : The panorama canvas (output of warp_and_place).
+    base_img   : The reference image placed on the canvas.
+    offset     : (tx, ty) shift used to align base_img on warped_src.
+    feather    : Standard feather param (ignored/deprecated for this full 2D approach).
 
     Returns
     -------
-    Blended BGR image (same size as canvas).
+    Blended BGR image (same size as warped_src).
     """
     tx, ty = offset
     if tx < 0 or ty < 0:
         raise ValueError(f"Offset cannot be negative: {offset}")
 
+    h_w, w_w = warped_src.shape[:2]
     h_b, w_b = base_img.shape[:2]
-    result = canvas.copy().astype(np.float32)
+    result = warped_src.copy()
 
-    # Region on canvas where base_img sits
-    y1, y2 = ty, ty + h_b
-    x1, x2 = tx, tx + w_b
+    # Define the region where base_img will be placed on warped_src
+    y1, y2 = ty, min(ty + h_b, h_w)
+    x1, x2 = tx, min(tx + w_b, w_w)
+    
+    paste_h = y2 - y1
+    paste_w = x2 - x1
+    
+    if paste_w <= 0 or paste_h <= 0:
+        return warped_src
 
-    # Clip to canvas bounds
-    y2 = min(y2, canvas.shape[0])
-    x2 = min(x2, canvas.shape[1])
+    # Extract the relevant regions for blending
+    canvas_region = warped_src[y1:y2, x1:x2]
+    base_region = base_img[:paste_h, :paste_w]
 
-    base_region = base_img[:y2 - y1, :x2 - x1].astype(np.float32)
-    canvas_region = canvas[y1:y2, x1:x2].astype(np.float32)
+    # Create masks (1 for valid content pixels, 0 for background) for the overlap region
+    mask_src = (cv2.cvtColor(canvas_region, cv2.COLOR_BGR2GRAY) > 0).astype(np.uint8)
+    mask_dst = (cv2.cvtColor(base_region, cv2.COLOR_BGR2GRAY) > 0).astype(np.uint8)
 
-    # Build a horizontal feather mask: blend warped ← left seam region → base
-    # The mask is 1 for full base, 0 for full warped
-    mask = np.ones((y2 - y1, x2 - x1), dtype=np.float32)
+    # Compute Euclidean distance transform (distance to nearest 0-pixel)
+    dist_src = cv2.distanceTransform(mask_src, cv2.DIST_L2, 3)
+    dist_dst = cv2.distanceTransform(mask_dst, cv2.DIST_L2, 3)
 
-    # Identify columns where *both* canvas and base are non-zero (overlap)
-    canvas_gray = cv2.cvtColor(canvas[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
-    base_gray = cv2.cvtColor(base_img[:y2 - y1, :x2 - x1], cv2.COLOR_BGR2GRAY)
-    overlap_cols = np.where((canvas_gray.mean(axis=0) > 0) & (base_gray.mean(axis=0) > 0))[0]
+    # Normalize weights so they sum to 1 in the overlap region
+    epsilon = 1e-7
+    sum_dist = dist_src + dist_dst + epsilon
+    weight_src = dist_src / sum_dist
+    weight_dst = dist_dst / sum_dist
 
-    if len(overlap_cols) > 0:
-        ol_start = overlap_cols[0]
-        ol_end = overlap_cols[-1]
-        ol_width = max(ol_end - ol_start + 1, 1)
-        ramp = np.linspace(0, 1, ol_width)
-        # Apply blend over the full overlap width
-        mask[:, ol_start:ol_start + ol_width] = ramp
-        mask[:, :ol_start] = 0  # pure warped side
+    # Outside the overlap, correct weights so the pure image has weight 1.0
+    # This part needs to be applied to the full masks if they were computed globally,
+    # but here we are working on the overlap region.
+    # For the overlap, the weights should already sum to 1.
+    # If a pixel is only in src (mask_dst == 0), weight_src should be 1.
+    # If a pixel is only in dst (mask_src == 0), weight_dst should be 1.
+    # The current distance transform approach naturally handles this.
 
-    mask_3ch = np.stack([mask] * 3, axis=2)
-    blended_region = canvas_region * (1 - mask_3ch) + base_region * mask_3ch
-    result[y1:y2, x1:x2] = blended_region
+    weight_src_3ch = np.stack([weight_src] * 3, axis=2)
+    weight_dst_3ch = np.stack([weight_dst] * 3, axis=2)
 
-    return result.astype(np.uint8)
+    blended_region = canvas_region.astype(np.float32) * weight_src_3ch + base_region.astype(np.float32) * weight_dst_3ch
+    result[y1:y2, x1:x2] = np.clip(blended_region, 0, 255).astype(np.uint8)
+
+    return result
 
 
 # ---------------------------------------------------------------------------

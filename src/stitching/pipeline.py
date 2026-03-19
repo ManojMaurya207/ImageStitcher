@@ -44,22 +44,34 @@ def stitch_pair(
     Merged panorama (not yet cropped).
     """
     print(f"[pipeline] Detecting features (method={method})...")
-    kp1, des1 = detect_and_describe(src_img, method=method)
-    kp2, des2 = detect_and_describe(dst_img, method=method)
+    
+    # --- Avoid OOM by downscaling images just for feature detection ---
+    src_scale = min(1.0, 1200.0 / max(src_img.shape[:2]))
+    dst_scale = min(src_scale, 3000.0 / max(dst_img.shape[:2]))
+    
+    src_small = cv2.resize(src_img, (0,0), fx=src_scale, fy=src_scale, interpolation=cv2.INTER_AREA) if src_scale < 1.0 else src_img
+    dst_small = cv2.resize(dst_img, (0,0), fx=dst_scale, fy=dst_scale, interpolation=cv2.INTER_AREA) if dst_scale < 1.0 else dst_img
+
+    kp1, des1 = detect_and_describe(src_small, method=method)
+    kp2, des2 = detect_and_describe(dst_small, method=method)
     print(f"[pipeline] Found {len(kp1)} / {len(kp2)} keypoints in src / dst.")
 
     print("[pipeline] Matching features...")
     pts_src, pts_dst = match_features(kp1, des1, kp2, des2, method=method, ratio_thresh=ratio_thresh)
     print(f"[pipeline] {len(pts_src)} good matches after ratio test.")
 
+    # Scale coordinates back up to original image resolution
+    pts_src = pts_src / src_scale
+    pts_dst = pts_dst / dst_scale
+
     print("[pipeline] Computing homography (RANSAC)...")
-    H = compute_homography(pts_src, pts_dst, ransac_thresh=ransac_thresh)
+    H, rmse = compute_homography(pts_src, pts_dst, ransac_thresh=ransac_thresh)
 
     print("[pipeline] Warping and placing images on canvas...")
-    canvas, offset = warp_and_place(src_img, dst_img, H)
+    warped_src, offset = warp_and_place(src_img, dst_img, H)
 
     print("[pipeline] Blending seam...")
-    blended = blend_images(canvas, dst_img, offset, feather=feather)
+    blended = blend_images(warped_src, dst_img, offset, feather=feather)
 
     return blended
 
@@ -106,13 +118,18 @@ def stitch_images(
     print(f"[pipeline] Starting stitching of {len(images)} image(s)...")
 
     # Start with the first two images, warping images[1] onto images[0] (base)
-    panorama = stitch_pair(
-        images[1], images[0],
-        method=method,
-        ratio_thresh=ratio_thresh,
-        ransac_thresh=ransac_thresh,
-        feather=feather,
-    )
+    try:
+        panorama = stitch_pair(
+            images[1], images[0],
+            method=method,
+            ratio_thresh=ratio_thresh,
+            ransac_thresh=ransac_thresh,
+            feather=feather,
+        )
+    except RuntimeError as e:
+        print(f"[pipeline] Warning: Failed to stitch initial pair. Error: {e}")
+        print("[pipeline] Falling back to the first image.")
+        panorama = images[0]
 
     # Sequentially add remaining images
     for i, next_img in enumerate(images[2:], start=2):

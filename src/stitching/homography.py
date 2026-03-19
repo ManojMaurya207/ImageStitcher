@@ -15,19 +15,20 @@ def compute_homography(
     pts_src: np.ndarray,
     pts_dst: np.ndarray,
     ransac_thresh: float = 4.0,
-) -> np.ndarray:
+) -> tuple[np.ndarray, float]:
     """
-    Estimate a 3×3 homography matrix mapping pts_src → pts_dst using RANSAC.
+    Estimate a 3x3 homography matrix mapping pts_src -> pts_dst using RANSAC.
 
     Parameters
     ----------
-    pts_src       : (N, 2) float32 – source points (in image being warped).
-    pts_dst       : (N, 2) float32 – destination points (in reference image).
+    pts_src       : (N, 2) float32 - source points (in image being warped).
+    pts_dst       : (N, 2) float32 - destination points (in reference image).
     ransac_thresh : Max pixel error to consider a match an inlier (default 4.0).
 
     Returns
     -------
-    H : (3, 3) float64 homography matrix.
+    H    : (3, 3) float64 homography matrix.
+    rmse : float, root mean square alignment error of the inliers.
 
     Raises
     ------
@@ -47,9 +48,22 @@ def compute_homography(
         )
 
     n_inliers = int(mask.sum()) if mask is not None else 0
-    print(f"[homography] H estimated — {n_inliers}/{len(pts_src)} inliers (RANSAC thresh={ransac_thresh}px)")
+    
+    # Calculate RMSE over inliers
+    inliers_src = pts_src[(mask.ravel() == 1)]
+    inliers_dst = pts_dst[(mask.ravel() == 1)]
+    
+    if len(inliers_src) > 0:
+        inliers_src_homo = np.concatenate([inliers_src, np.ones((len(inliers_src), 1))], axis=1)
+        projected = (H @ inliers_src_homo.T).T
+        projected = projected[:, :2] / projected[:, 2:]
+        rmse = float(np.sqrt(np.mean(np.sum((projected - inliers_dst)**2, axis=1))))
+    else:
+        rmse = float('inf')
 
-    return H
+    print(f"[homography] H estimated — {n_inliers}/{len(pts_src)} inliers, RMSE={rmse:.2f}px")
+
+    return H, rmse
 
 
 def warp_and_place(
@@ -58,12 +72,9 @@ def warp_and_place(
     H: np.ndarray,
 ) -> np.ndarray:
     """
-    Warp src_img onto a canvas large enough to hold both src_img and dst_img,
-    then composite dst_img on top (overwriting the overlap region for now;
-    blending is handled in blender.py).
-
-    The canvas size is computed by projecting all four corners of src_img through H
-    and finding the union bounding box.
+    Warp src_img onto a canvas large enough to hold both src_img and dst_img.
+    Unlike the previous naive placement, this function no longer overwrites
+    the overlap with dst_img. Proper compositing is left entirely to blender.py.
 
     Parameters
     ----------
@@ -73,9 +84,8 @@ def warp_and_place(
 
     Returns
     -------
-    canvas : BGR image containing both images placed in their correct positions.
-             Also returns the translation offset used.
-    offset : (tx, ty) integer offset applied so that warped src_img stays in frame.
+    warped_src : BGR image containing the warped src_img on the expanded canvas.
+    offset     : (tx, ty) integer offset so blender knows where to place dst_img.
     """
     h_src, w_src = src_img.shape[:2]
     h_dst, w_dst = dst_img.shape[:2]
@@ -106,20 +116,17 @@ def warp_and_place(
 
     if canvas_w <= 0 or canvas_h <= 0:
         raise RuntimeError("Degenerate homography resulted in invalid canvas dimensions. Check overlap.")
+        
+    if canvas_w > 20000 or canvas_h > 20000:
+        raise RuntimeError(f"Canvas layout excessively stretched ({canvas_w}x{canvas_h}). Unstable homography.")
 
     # Build translation matrix
     T = np.array([[1, 0, tx],
                   [0, 1, ty],
                   [0, 0,  1]], dtype=np.float64)
 
-    # Warp src_img onto the canvas
+    # Warp src_img onto the canvas using high-quality interpolation
     H_shifted = T @ H
-    canvas = cv2.warpPerspective(src_img, H_shifted, (canvas_w, canvas_h))
-
-    # Place dst_img on the canvas (non-zero pixels of dst overwrite canvas)
-    paste_w = min(w_dst, canvas_w - tx)
-    paste_h = min(h_dst, canvas_h - ty)
-    if paste_w > 0 and paste_h > 0:
-        canvas[ty:ty + paste_h, tx:tx + paste_w] = dst_img[:paste_h, :paste_w]
+    canvas = cv2.warpPerspective(src_img, H_shifted, (canvas_w, canvas_h), flags=cv2.INTER_LANCZOS4)
 
     return canvas, offset

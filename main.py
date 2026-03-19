@@ -38,7 +38,7 @@ def parse_args():
     parser.add_argument(
         "--input", "-i",
         nargs="+",
-        default=["data/sample"],
+        default=["data/SampleImg/3x3Sample40x"],
         metavar="PATH",
         help=(
             "One or more image files, OR a single directory/glob pattern. "
@@ -56,9 +56,9 @@ def parse_args():
 
     parser.add_argument(
         "--method", "-m",
-        default="ORB",
+        default="SIFT",
         choices=["ORB", "SIFT"],
-        help="Feature detector to use (default: ORB).",
+        help="Feature detector to use (default: SIFT).",
     )
 
     parser.add_argument(

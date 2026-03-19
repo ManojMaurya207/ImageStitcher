@@ -14,6 +14,23 @@ import cv2
 import numpy as np
 
 
+def preprocess_image(image: np.ndarray) -> np.ndarray:
+    """
+    Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) 
+    to enhance contrast, which is critical for medical slides.
+    """
+    if len(image.shape) == 3:
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l = clahe.apply(l)
+        lab = cv2.merge((l, a, b))
+        enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        return cv2.cvtColor(enhanced, cv2.COLOR_BGR2GRAY)
+    else:
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        return clahe.apply(image)
+
 def detect_and_describe(
     image: np.ndarray,
     method: str = "ORB",
@@ -33,11 +50,8 @@ def detect_and_describe(
     keypoints   : list of cv2.KeyPoint
     descriptors : np.ndarray of shape (N, D)
     """
-    # Convert to grayscale if needed
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image.copy()
+    # Preprocess with CLAHE to enhance contrast for medical slides
+    gray = preprocess_image(image)
 
     method = method.upper()
 
